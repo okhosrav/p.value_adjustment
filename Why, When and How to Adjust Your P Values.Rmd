@@ -1,0 +1,197 @@
+---
+title: "Why, When and How to Adjust Your P-Values?"
+author: "Ojan Khosravifar"
+output: html_document
+---
+
+# Mutliple Testing
+
+This document was developed and adapted in part from [Jafari & Ansari-Pour (2019)](https://doi.org/10.22074/cellj.2019.5992). Adjusting p-values for multiple testing is an important part of analyzing 'omics data. For example, suppose you want to independently test the transcriptional expression of twenty genes across two experiments. At first blush this doesn't seem like a bad idea. However, using a significance level, or alpha (*α*), of 0.05, what's the probability of observing at least one significant result due to chance alone?
+
+<div align="center">**ℙ**(at least one significant result) = 1 - **ℙ**(no significant results)</div>
+<div align="center">⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀= 1 - (1 - 0.05)<sup>20</sup></div>
+<div align="center">⠀⠀⠀⠀⠀⠀≈ 0.64</div>
+
+So, with 20 tests being considered, we have a 64% chance of observing at least one significant result, even if all of the tests are not actually significant. In the 'omics, it is common for the number of tests to be well above 20, quickly making individual hypothesis testing problematic. By adjusting our p-values in cases of multiple independent tests we can avoid the possibility of observing a false positive.
+
+The two most popular strategies of p-value adjustment are the Bonferroni and [Benjamini-Hochberg]( https://doi.org/10.1111/j.2517-6161.1995.tb02031.x) method.
+
+### The Bonferroni Method
+
+The Bonferroni method sets the significance cut-off at *α*/*n*, where *n* is the number of tests performed. For example, with 20 tests and *α* = 0.05, you'd only reject a null hypothesis if the p-value is less than 0.05/20 = 0.0025.
+
+The Bonferroni method tends to be a bit too conservative. To demonstrate this, let's calculate the probability of observing at least one significant result when using the correction just described:
+
+<div align="center">**ℙ**(at least one significant result) = 1 - **ℙ**(no significant results)</div>
+<div align="center">⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀= 1 - (1 - 0.0025)<sup>20</sup></div>
+<div align="center">⠀⠀⠀⠀⠀⠀⠀⠀≈ 0.0488</div>
+
+Here, we're just a shade under our desired 0.05 level. However, we're assuming that all tests are independent of each other. Practically, that is often not the case and the Bonferroni correction can be extremely conservative, leading to a high rate of false negatives. 
+
+Let's use an example data set of 1300 hypothetical p-values between 0-1.0 to demonstrate this.
+
+```{r setup, echo=F}
+#install.packages("ggplot2")
+#install.packages("patchwork")
+library(ggplot2)
+library(patchwork)
+```
+
+```{r no.adj}
+#generate data set of p-values from 0-1.0
+#first beta function is highly positively skewed
+#second beta function is highly negatively skewed but less numerous
+no.adj <- sort(c(rbeta(1000,.5,5),rbeta(300,5,2)))
+
+#summary statistics
+summary(no.adj)
+#smallest p values
+head(no.adj)
+#largest p values
+tail(no.adj)
+
+#average number of significant p-values/1300 from 100 trials of 1300
+adj <- matrix(NA, nrow=100, ncol=1)
+beta <- matrix(NA, nrow=1000, ncol=1300)
+for (i in 1:100){
+  beta[i,] <- sort(c(rbeta(1000,.5,5),rbeta(300,5,2)))
+  adj[i,] <- length(which(beta[i,] <=0.05))
+}
+mean(adj)
+```
+
+```{r no.adj1, echo=F}
+#convert to df for plotting
+p.value <- as.data.frame(no.adj)
+
+#visualize data set as density plot
+ggplot(p.value, aes(x=no.adj)) +
+  geom_density() +
+  ggtitle("p.value Density") +
+  theme_classic()
+```
+
+We have 1300 randomly generated p-values skewed towards the lower end of the p-value scale. There is also a small hump around *α* ≈ 0.75. Now let's see what happens with the Bonferroni adjusted p-values:
+
+```{r bon.p}
+#perform bonferroni p-value adjustment
+bon.p <- p.adjust(no.adj, method="bonferroni")
+
+#summary statistics
+summary(bon.p)
+#smallest p values
+head(bon.p)
+#largest p values
+tail(bon.p)
+
+#average number of significant p-values/1300 from 100 trials of 1300
+bon <- matrix(NA, nrow=100, ncol=1)
+for (i in 1:100){
+  beta[i,] <- p.adjust(beta[i,], method="bonferroni")
+  bon[i,] <- length(which(beta[i,] <=0.05))
+}
+mean(bon)
+#average number of ~1.0 p-values/1300 from 100 trials of 1300
+for (i in 1:100){
+  bon[i,] <- length(which(beta[i,] >=0.999))
+}
+mean(bon)
+```
+
+```{r bon.p1, echo=F}
+#convert to df for plotting
+p.value$bon.p <- bon.p
+
+#visualize data set
+#density plot
+p1 <- ggplot(p.value, aes(x=bon.p)) +
+  geom_density() +
+  ggtitle("bon.p Density") +
+  theme_classic()
+#scatterplot no.adj vs bon.p
+p2 <- ggplot(p.value, aes(x=no.adj, y=bon.p)) +
+  geom_point() +
+  ggtitle("no.adj vs bon.p") +
+  theme_classic()
+wrap_plots(p1,p2,ncol=2)
+```
+
+After the Bonferroni adjustment, there are much fewer values below the significance cut-off. Importantly, most of the p-values are now 1.0. This is clearly a misrepresentation of the overall structure of the data. However, the Bonferroni method can be valuable for identifying true positives with great certainty.
+
+### The Benjamini-Hochberg Method
+
+This method is philosophically different and more powerful than the Bonferroni method. Rather than controlling the false positive rate, the Benjamini-Hochberg method controls the false discovery rate. This is defined as the proportion of false positives among all significant results. P-values are ranked in an ascending array and multiplied by *m*/*k* where *k* is the position of a p-value in ascending order and *m* is the number of independent tests.
+
+<div align="center">*α* = *α* * *m*/*k*</div>
+
+```{r bh demo, echo=F}
+#generate uniform data set + positive skewed data set
+demo <- c(runif(5000,0,1),(runif(5000,0,1))^2)
+
+#visualize with histogram
+hist(demo, breaks=20, main="Histogram of P-Values", xlab="p.value", xaxt = "n")
+#change x axis (1) ticks
+axis(1,at=c(rep(0:20)/20))
+#significance cutoff
+abline(v=0.05,col="red")
+#baseline uniform p-values
+abline(h=400,col="blue")
+#in plot text
+text(xy.coords(0.05,1000),pos=4,cex=0.8,label="True Posititives")
+text(xy.coords(0.05,300),pos=4,cex=0.8,label="False Posititives")
+text(xy.coords(0.8,500),cex=0.6,label="Baseline P-values")
+```
+
+Below is an illustration of how this adjustment performs using the same data set as with the Bonferroni adjustment.
+
+```{r bh.p}
+#perform benjamini-hochberg p-value adjustment
+bh.p <- p.adjust(no.adj, method="fdr")
+#summary statistics
+summary(bh.p)
+#smallest p values
+head(bh.p)
+#largest p values
+tail(bh.p)
+
+#average number of significant p-values/1300 from 100 trials of 1300
+bh <- matrix(NA, nrow=100, ncol=1)
+for (i in 1:100){
+  beta[i,] <- sort(c(rbeta(1000,.5,5),rbeta(300,5,2)))
+  beta[i,] <- p.adjust(beta[i,], method="fdr")
+  bh[i,] <- length(which(beta[i,] <=0.05))
+}
+mean(bh)
+#average number of ~1.0 p-values/1300 from 100 trials of 1300
+for (i in 1:100){
+  bh[i,] <- length(which(beta[i,] >=0.999))
+}
+mean(bh)
+```
+
+```{r bh.p1, echo=F}
+#convert to df for plotting
+p.value$bh.p <- bh.p
+
+#visualize data set
+#density plot
+p1 <- ggplot(p.value, aes(x=bh.p)) +
+  geom_density() +
+  ggtitle("bh.p Density") +
+  theme_classic()
+#scatterplot no.adj vs bh.p
+p2 <- ggplot(p.value, aes(x=no.adj, y=bh.p)) +
+  geom_point() +
+  ggtitle("no.adj vs bh.p") +
+  theme_classic()
+#scatterplot bon.p vs bh.p
+p3 <- ggplot(p.value, aes(x=bon.p, y=bh.p)) +
+  geom_point() +
+  ggtitle("bon.p vs bh.p") +
+  theme_classic()
+wrap_plots(p1,p2,p3,ncol=2)
+```
+
+From this example, it is clear that the Benjamini-Hochberg adjustment has shifted the p-values from our distribution, but has not fundamentally changed the structure of the distribution. There are still a large number of significant p-values, while there are no 1.0s. 
+
+This more balanced approach is more appropriate for multiple testing correction in the context of 'omics data. 
